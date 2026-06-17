@@ -1,0 +1,17 @@
+services:
+  dicom-sender:
+    container_name: dicom-sender
+    image: registry.labspace.io.vn/dicom-sender:1.0.1
+    ports:
+      - "5001:5000"
+    environment:
+      - DEFAULT_AE_TITLE=DCMSRV
+      - DEFAULT_HOST=127.0.0.1
+      - DEFAULT_PORT=11112
+      - CONNECT_TIMEOUT=5000
+      - RESPONSE_TIMEOUT=30000
+      - UPLOAD_FOLDER=/data/dicom
+    volumes:
+      - ./logs:/app/logs
+      - ./dicoms:/data/dicom
+    restart: unless-stopped
