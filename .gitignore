@@ -1,3 +1,5 @@
 logs
 dicoms
 *.csv
+.DS_Store
+.idea

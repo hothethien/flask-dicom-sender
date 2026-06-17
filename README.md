@@ -132,9 +132,9 @@ services:
       - "5000:5000"
     environment:
       - UPLOAD_FOLDER=/data/dicom
-      - DEFAULT_AE_TITLE=POMHANLCI
-      - DEFAULT_HOST=14.224.233.123
-      - DEFAULT_PORT=31112
+      - DEFAULT_AE_TITLE=DCMSRV
+      - DEFAULT_HOST=127.0.0.1
+      - DEFAULT_PORT=11112
       - BATCH_SIZE=100
     volumes:
       - ./logs:/app/logs
