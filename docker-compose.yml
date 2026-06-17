@@ -5,7 +5,7 @@ services:
     ports:
       - "5001:5000"
     environment:
-      - DEFAULT_AE_TITLE=DCMSRV
+      - DEFAULT_AE_TITLE=DCMRCV
       - DEFAULT_HOST=127.0.0.1
       - DEFAULT_PORT=11112
       - CONNECT_TIMEOUT=5000
