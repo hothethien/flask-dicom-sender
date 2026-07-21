@@ -1,7 +1,0 @@
-logs
-dicoms
-*.csv
-.DS_Store
-.idea
-__pycache__*
-.gitignore
