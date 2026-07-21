@@ -12,6 +12,9 @@ services:
       - CONNECT_TIMEOUT=5000
       - RESPONSE_TIMEOUT=30000
       - UPLOAD_FOLDER=/dicoms
+      # - SERVER_NAME=yendungbgg
+      # - TELEGRAM_BOT_TOKEN=123456789:ABC...
+      # - TELEGRAM_CHAT_ID=-100123456789
     volumes:
       - ./logs:/app/logs
       - ./dicoms:/dicoms

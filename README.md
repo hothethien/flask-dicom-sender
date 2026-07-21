@@ -35,6 +35,9 @@ docker compose up -d
 | `RESPONSE_TIMEOUT` | `30000` | DIMSE response timeout (ms) |
 | `BATCH_SIZE` | `100` | Number of files per storescu call |
 | `MAX_RETRIES` | `2` | Maximum retry attempts per batch before fallback |
+| `SERVER_NAME` / `HOSTNAME` | System Hostname | Identifier of the host server in Telegram alerts |
+| `TELEGRAM_BOT_TOKEN` | *None* | Optional Telegram Bot API token for job alerts |
+| `TELEGRAM_CHAT_ID` | *None* | Optional Telegram Chat/Channel ID for job alerts |
 
 ## How It Works
 
@@ -44,7 +47,11 @@ docker compose up -d
    - If a batch fails, it retries up to `MAX_RETRIES` times (with 1s backoff).
    - If the batch still fails (e.g. due to a corrupted DICOM file in the batch), the worker automatically enters **Single-file Fallback mode**: it sends each file in the batch individually to isolate invalid files, ensuring all valid files are successfully transmitted to PACS.
 4. **Thread-Safe Batch CSV Logging**: Log entries are written in bulk with file size in MB (`file_size_mb`) under a thread lock (`threading.Lock()`), ensuring low Disk I/O overhead and zero race conditions.
-5. **Progress Tracking**: Track job progress real-time via `GET /jobs/<job_id>`.
+5. **Telegram Notifications**: Automatically triggers alerts for:
+   - 🚀 **Job Started**: When a directory send job starts processing.
+   - 🚨 **Real-time Error Alert**: When a specific DICOM file fails transmission.
+   - ✅ / ⚠️ **Job Completed**: Summary alert when the job finishes.
+6. **Progress Tracking**: Track job progress real-time via `GET /jobs/<job_id>`.
 
 ## API Endpoints
 

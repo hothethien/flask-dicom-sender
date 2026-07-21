@@ -1,8 +1,11 @@
 import csv
+import json
 import os
+import socket
 import subprocess
 import threading
 import time
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,8 +30,13 @@ CONNECT_TIMEOUT = os.environ.get("CONNECT_TIMEOUT", "5000")
 RESPONSE_TIMEOUT = os.environ.get("RESPONSE_TIMEOUT", "30000")
 
 # How many files to send per storescu call (to avoid too-long command)
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
+# Retry configuration
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "2"))
+
+# Telegram alert configuration
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+SERVER_NAME = os.environ.get("SERVER_NAME") or os.environ.get("HOSTNAME") or socket.gethostname()
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -68,6 +76,90 @@ def log_to_csv(records):
 init_csv()
 
 
+def send_telegram_msg(message: str):
+    """Send a raw text/markdown message to Telegram if credentials are provided."""
+    bot_token = TELEGRAM_BOT_TOKEN or os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = TELEGRAM_CHAT_ID or os.environ.get("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        return
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except Exception as e:
+        app.logger.error(f"Failed to send Telegram notification: {e}")
+
+
+def send_telegram_job_started(job_data: dict):
+    """Send alert when a job starts processing."""
+    job_id = job_data.get("job_id")
+    total = job_data.get("total", 0)
+    directory = job_data.get("directory", "")
+    started_at = job_data.get("started_at", "")
+
+    message = (
+        f"🚀 *DICOM Send Job Started*\n\n"
+        f"• *Host*: `{SERVER_NAME}`\n"
+        f"• *Job ID*: `{job_id}`\n"
+        f"• *Directory*: `{directory}`\n"
+        f"• *Total Files*: `{total}`\n"
+        f"• *Started*: `{started_at}`"
+    )
+    send_telegram_msg(message)
+
+
+def send_telegram_error_alert(job_id: str, file_path: str, ae_title: str, host: str, port: str):
+    """Send real-time alert when a specific DICOM file fails to send."""
+    message = (
+        f"🚨 *DICOM File Send Failed*\n\n"
+        f"• *Host*: `{SERVER_NAME}`\n"
+        f"• *Job ID*: `{job_id}`\n"
+        f"• *Destination*: `{ae_title}@{host}:{port}`\n"
+        f"• *File Path*: `{file_path}`\n"
+        f"• *Timestamp*: `{datetime.now().isoformat()}`"
+    )
+    send_telegram_msg(message)
+
+
+def send_telegram_notification(job_data: dict):
+    """Send job summary alert to Telegram when job completes."""
+    job_id = job_data.get("job_id")
+    total = job_data.get("total", 0)
+    success = job_data.get("success", 0)
+    failure = job_data.get("failure", 0)
+    directory = job_data.get("directory", "")
+    started_at = job_data.get("started_at", "")
+    finished_at = job_data.get("finished_at", "")
+
+    status_icon = "✅" if failure == 0 else "⚠️"
+    status_title = "DICOM Send Job Completed" if failure == 0 else "DICOM Send Job Completed with Errors"
+    message = (
+        f"{status_icon} *{status_title}*\n\n"
+        f"• *Host*: `{SERVER_NAME}`\n"
+        f"• *Job ID*: `{job_id}`\n"
+        f"• *Directory*: `{directory}`\n"
+        f"• *Total Files*: `{total}`\n"
+        f"• *Success*: `{success}`\n"
+        f"• *Failure*: `{failure}`\n"
+        f"• *Started*: `{started_at}`\n"
+        f"• *Finished*: `{finished_at}`"
+    )
+    send_telegram_msg(message)
+
+
 def send_dicom(file_path: str, ae_title: str, host: str, port: str) -> str:
     """Send a DICOM file/directory using storescu. Returns 'success' or 'failure'."""
     connection = f"{ae_title}@{host}:{port}"
@@ -96,6 +188,7 @@ def send_directory_task(job_id: str, directory: str, ae_title: str, host: str, p
     total = len(dicom_files)
     jobs[job_id]["total"] = total
     jobs[job_id]["status"] = "running"
+    send_telegram_job_started(jobs[job_id])
 
     success_count = 0
     failure_count = 0
@@ -157,6 +250,7 @@ def send_directory_task(job_id: str, directory: str, ae_title: str, host: str, p
                     success_count += 1
                 else:
                     failure_count += 1
+                    send_telegram_error_alert(job_id, str(f), ae_title, host, port)
             log_to_csv(fallback_records)
 
         jobs[job_id]["sent"] = success_count + failure_count
@@ -165,6 +259,7 @@ def send_directory_task(job_id: str, directory: str, ae_title: str, host: str, p
 
     jobs[job_id]["status"] = "completed"
     jobs[job_id]["finished_at"] = datetime.now().isoformat()
+    send_telegram_notification(jobs[job_id])
 
 
 @app.route("/send", methods=["POST"])
