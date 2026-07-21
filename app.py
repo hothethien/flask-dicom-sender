@@ -2,6 +2,7 @@ import csv
 import os
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,26 +28,44 @@ RESPONSE_TIMEOUT = os.environ.get("RESPONSE_TIMEOUT", "30000")
 
 # How many files to send per storescu call (to avoid too-long command)
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "2"))
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-CSV_HEADERS = ["timestamp", "file_path", "status"]
+CSV_HEADERS = ["timestamp", "file_path", "file_size_mb", "status"]
 
-# In-memory job tracker
+# In-memory job tracker & thread lock
 jobs = {}
+csv_lock = threading.Lock()
 
 
 def init_csv():
-    if not os.path.exists(CSV_LOG_FILE):
-        with open(CSV_LOG_FILE, "w", newline="") as f:
+    """Ensure parent directory exists and initialize CSV with headers if file does not exist."""
+    parent_dir = os.path.dirname(CSV_LOG_FILE)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    with csv_lock:
+        if not os.path.exists(CSV_LOG_FILE):
+            with open(CSV_LOG_FILE, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(CSV_HEADERS)
+
+
+def log_to_csv(records):
+    """Log a single record dict or a list of record dicts to CSV safely (thread-safe)."""
+    if isinstance(records, dict):
+        records = [records]
+
+    with csv_lock:
+        with open(CSV_LOG_FILE, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(CSV_HEADERS)
+            for record in records:
+                writer.writerow([record.get(h, "") for h in CSV_HEADERS])
 
 
-def log_to_csv(record: dict):
-    with open(CSV_LOG_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([record.get(h, "") for h in CSV_HEADERS])
+# Automatically initialize CSV on module load
+init_csv()
 
 
 def send_dicom(file_path: str, ae_title: str, host: str, port: str) -> str:
@@ -81,7 +100,7 @@ def send_directory_task(job_id: str, directory: str, ae_title: str, host: str, p
     success_count = 0
     failure_count = 0
 
-    # Send in batches
+    # Send in batches with single-file fallback
     for i in range(0, total, BATCH_SIZE):
         batch = dicom_files[i:i + BATCH_SIZE]
         batch_paths = [str(f) for f in batch]
@@ -95,23 +114,50 @@ def send_directory_task(job_id: str, directory: str, ae_title: str, host: str, p
             "--response-timeout", RESPONSE_TIMEOUT,
         ] + batch_paths
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            status = "success" if result.returncode == 0 else "failure"
-        except Exception:
-            status = "failure"
+        # Try sending the full batch first (with retries if needed)
+        batch_success = False
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode == 0:
+                    batch_success = True
+                    break
+            except Exception:
+                pass
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(1)
 
-        # Log each file in batch
-        for f in batch:
-            log_to_csv({
-                "timestamp": datetime.now().isoformat(),
-                "file_path": str(f),
-                "status": status,
-            })
-            if status == "success":
-                success_count += 1
-            else:
-                failure_count += 1
+        now_iso = datetime.now().isoformat()
+
+        if batch_success:
+            # All files in batch succeeded
+            records = [
+                {
+                    "timestamp": now_iso,
+                    "file_path": str(f),
+                    "file_size_mb": round(f.stat().st_size / (1024 * 1024), 2) if f.exists() else 0.0,
+                    "status": "success",
+                }
+                for f in batch
+            ]
+            log_to_csv(records)
+            success_count += len(batch)
+        else:
+            # Fallback: Batch failed. Try sending files individually to isolate any corrupted/failed file.
+            fallback_records = []
+            for f in batch:
+                file_status = send_dicom(str(f), ae_title, host, port)
+                fallback_records.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "file_path": str(f),
+                    "file_size_mb": round(f.stat().st_size / (1024 * 1024), 2) if f.exists() else 0.0,
+                    "status": file_status,
+                })
+                if file_status == "success":
+                    success_count += 1
+                else:
+                    failure_count += 1
+            log_to_csv(fallback_records)
 
         jobs[job_id]["sent"] = success_count + failure_count
         jobs[job_id]["success"] = success_count
@@ -140,10 +186,13 @@ def send():
     file.save(file_path)
 
     try:
+        bytes_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        file_size_mb = round(bytes_size / (1024 * 1024), 2)
         status = send_dicom(file_path, ae_title, host, port)
         record = {
             "timestamp": datetime.now().isoformat(),
             "file_path": file_path,
+            "file_size_mb": file_size_mb,
             "status": status,
         }
         log_to_csv(record)
@@ -219,10 +268,11 @@ def get_logs():
         return jsonify([])
 
     logs = []
-    with open(CSV_LOG_FILE, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            logs.append(row)
+    with csv_lock:
+        with open(CSV_LOG_FILE, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                logs.append(row)
     return jsonify(logs)
 
 
@@ -232,5 +282,4 @@ def health():
 
 
 if __name__ == "__main__":
-    init_csv()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)
