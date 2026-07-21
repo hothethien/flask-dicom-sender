@@ -1,21 +1,18 @@
 services:
   dicom-sender:
     container_name: dicom-sender
-    # image: registry.labspace.io.vn/dicom-sender:1.0.1
     image: registry.labspace.io.vn/dicom-sender:2.1
     ports:
       - "5001:5001"
     environment:
       - TZ=Asia/Ho_Chi_Minh
-      - DEFAULT_AE_TITLE=VNPT_PACS
-      - DEFAULT_HOST=14.225.122.29
+      - DEFAULT_AE_TITLE=DCMSRV
+      - DEFAULT_HOST=X.X.X.X
       - DEFAULT_PORT=11112
       - CONNECT_TIMEOUT=5000
       - RESPONSE_TIMEOUT=30000
       - UPLOAD_FOLDER=/dicoms
-      # - UPLOAD_FOLDER=/data/dicom
     volumes:
       - ./logs:/app/logs
-      # - ./dicoms:/data/dicom
       - ./dicoms:/dicoms
     restart: unless-stopped
