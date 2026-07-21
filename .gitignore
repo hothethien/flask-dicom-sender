@@ -4,3 +4,4 @@ dicoms
 .DS_Store
 .idea
 __pycache__*
+.gitignore
